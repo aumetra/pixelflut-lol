@@ -1,7 +1,10 @@
 #[macro_use]
 extern crate tracing;
 
-use monoio::{io::AsyncWriteRentExt, net::TcpStream};
+use monoio::{
+    io::{AsyncWriteRent, AsyncWriteRentExt},
+    net::TcpStream,
+};
 use std::{
     fs::File,
     mem,
@@ -72,6 +75,8 @@ async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
     attempt!(stream.write_all(b"OFFSET ").await);
     attempt!(stream.write_all(OFFSET).await);
     attempt!(stream.write_all(b"\n").await);
+    stream.flush().await?;
+
     Ok(stream)
 }
 
@@ -154,8 +159,7 @@ fn main() -> anyhow::Result<()> {
                                     let frame: &riptide_common::Frame =
                                         unsafe { &*(frame as *const _) };
 
-                                    if let Err(error) =
-                                        release_the_kraken(&mut stream, frame).await
+                                    if let Err(error) = release_the_kraken(&mut stream, frame).await
                                     {
                                         error!(?error, "sending failed :((");
                                         stream = connect(args.addr).await.unwrap();
