@@ -47,10 +47,6 @@ async fn release_the_kraken(
     info!("sending frame..");
     for (y_pos, y_lane) in frame.data.iter().enumerate() {
         for (x_pos, pixel) in y_lane.iter().enumerate() {
-            if *pixel.hex_repr == *b"000000" {
-                continue;
-            }
-            
             attempt!(conn.write_all(b"PX ").await);
 
             let x_str = encode_dec(x_pos);
