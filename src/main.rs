@@ -161,6 +161,7 @@ fn main() -> anyhow::Result<()> {
 
                                     if let Err(error) = release_the_kraken(&mut stream, frame, start, end).await {
                                         error!(?error, "sending failed :((");
+                                        stream = TcpStream::connect(args.addr).await.unwrap();
                                     }
                                 }
                             });
