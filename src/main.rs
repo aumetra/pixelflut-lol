@@ -43,13 +43,14 @@ fn encode_dec(
 async fn release_the_kraken(
     conn: &mut TcpStream,
     frame: &riptide_common::Frame<'_>,
-    start: usize,
-    end: usize,
 ) -> anyhow::Result<()> {
     info!("sending frame..");
-    let slice = &frame.data[start..end];
-    for (y_pos, y_lane) in slice.iter().enumerate() {
+    for (y_pos, y_lane) in frame.data.iter().enumerate() {
         for (x_pos, pixel) in y_lane.iter().enumerate() {
+            if *pixel.hex_repr == *b"000000" {
+                continue;
+            }
+            
             attempt!(conn.write_all(b"PX ").await);
 
             let x_str = encode_dec(x_pos);
@@ -156,17 +157,8 @@ fn main() -> anyhow::Result<()> {
                                     let frame: &riptide_common::Frame =
                                         unsafe { &*(frame as *const _) };
 
-                                    let frame_len = frame.data.len();
-                                    let length_per_thread = frame_len / args.num_conn;
-                                    let start = count * length_per_thread;
-                                    let end = if count == args.num_conn - 1 {
-                                        frame_len
-                                    } else {
-                                        (count + 1) * length_per_thread
-                                    };
-
                                     if let Err(error) =
-                                        release_the_kraken(&mut stream, frame, start, end).await
+                                        release_the_kraken(&mut stream, frame).await
                                     {
                                         error!(?error, "sending failed :((");
                                         stream = connect(args.addr).await.unwrap();
