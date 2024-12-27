@@ -1,10 +1,7 @@
 #[macro_use]
 extern crate tracing;
 
-use monoio::{
-    io::{AsyncWriteRent, AsyncWriteRentExt},
-    net::TcpStream,
-};
+use monoio::{io::AsyncWriteRentExt, net::TcpStream};
 use std::{
     fs::File,
     mem,
@@ -15,6 +12,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    thread,
     time::Duration,
 };
 
@@ -64,8 +62,6 @@ async fn release_the_kraken(
         }
     }
 
-    conn.flush().await?;
-
     Ok(())
 }
 
@@ -81,7 +77,7 @@ async fn build_conn_pool(addr: SocketAddr, num_conn: usize) -> anyhow::Result<Ve
     Ok(conn)
 }
 
-#[derive(argh::FromArgs)]
+#[derive(Clone, argh::FromArgs)]
 /// Pixelflut client to play cool videos :P
 struct Args {
     #[argh(option)]
@@ -101,13 +97,12 @@ struct Args {
     data: PathBuf,
 }
 
-#[monoio::main(enable_timer = true)]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args: Args = argh::from_env();
 
     info!("loading data..");
-    let data_file = File::open(args.data)?;
+    let data_file = File::open(&args.data)?;
     let data = unsafe { memmap2::Mmap::map(&data_file)? };
     let frames: Vec<riptide_common::FrameRef<'_>> = postcard::from_bytes(&data)?;
     let frames = unsafe {
@@ -117,27 +112,51 @@ async fn main() -> anyhow::Result<()> {
         >(&frames)
     };
 
-    info!("building conn pool");
-    let pool = build_conn_pool(args.addr, args.num_conn).await?;
-
     let sleep_duration = Duration::from_secs_f32(1.0 / args.framerate);
     let mut frame_ctr = 0;
     let current_frame = Arc::new(AtomicUsize::new(&frames[frame_ctr] as *const _ as usize));
 
-    info!("spawning streams");
-    for mut stream in pool {
-        let current_frame = Arc::clone(&current_frame);
-        
-        monoio::time::sleep(Duration::from_millis(2)).await;
-        
-        monoio::spawn(async move {
-            loop {
-                let frame = current_frame.load(Ordering::Acquire);
-                let frame = unsafe { &*(frame as *const _) };
+    for idx in 0..thread::available_parallelism().unwrap().into() {
+        info!("spawning runtime {idx}");
 
-                if let Err(error) = release_the_kraken(&mut stream, frame).await {
-                    error!(?error, "sending failed :((");
-                }
+        let current_frame = current_frame.clone();
+        thread::spawn({
+            let args = args.clone();
+
+            move || {
+                let mut runtime = monoio::RuntimeBuilder::<
+                    monoio::time::TimeDriver<monoio::IoUringDriver>,
+                >::new()
+                .build()
+                .unwrap();
+
+                runtime
+                    .block_on(async move {
+                        info!("building conn pool");
+                        let pool = build_conn_pool(args.addr, args.num_conn).await?;
+
+                        info!("spawning streams");
+                        for mut stream in pool {
+                            let current_frame = Arc::clone(&current_frame);
+
+                            monoio::time::sleep(Duration::from_millis(2)).await;
+
+                            monoio::spawn(async move {
+                                loop {
+                                    let frame = current_frame.load(Ordering::Acquire);
+                                    let frame = unsafe { &*(frame as *const _) };
+
+                                    if let Err(error) = release_the_kraken(&mut stream, frame).await
+                                    {
+                                        error!(?error, "sending failed :((");
+                                    }
+                                }
+                            });
+                        }
+
+                        anyhow::Ok(())
+                    })
+                    .unwrap();
             }
         });
     }
@@ -146,8 +165,9 @@ async fn main() -> anyhow::Result<()> {
         frame_ctr += 1;
         frame_ctr %= frames.len();
 
-        monoio::time::sleep(sleep_duration).await;
+        thread::sleep(sleep_duration);
 
+        info!("switching to frame {frame_ctr}");
         current_frame.store(&frames[frame_ctr] as *const _ as usize, Ordering::Release);
     }
 }
