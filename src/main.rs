@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
 
             move || {
                 let mut runtime = monoio::RuntimeBuilder::<
-                    monoio::time::TimeDriver<monoio::IoUringDriver>,
+                    monoio::time::TimeDriver<monoio::FusionDriver>,
                 >::new()
                 .build()
                 .unwrap();
