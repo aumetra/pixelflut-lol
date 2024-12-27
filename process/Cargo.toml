@@ -1,0 +1,16 @@
+[package]
+name = "riptide-process"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.95"
+argh = "0.1.13"
+image = "0.25.5"
+itertools = "0.13.0"
+mimalloc = "0.1.43"
+postcard = { version = "1.1.1", features = ["use-std"] }
+riptide-common = { path = "../common" }
+serde = "1.0.216"
+tempfile = "3.14.0"
+tracing-subscriber = "0.3.19"

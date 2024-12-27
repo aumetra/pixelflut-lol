@@ -1,0 +1,25 @@
+[package]
+name = "riptide"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.95"
+argh = "0.1.13"
+lexical = { version = "7.0.4", features = ["power-of-two"] }
+memmap2 = "0.9.5"
+mimalloc = "0.1.43"
+monoio = { version = "0.2.4", features = ["tracing"] }
+postcard = "1.1.1"
+riptide-common = { version = "0.1.0", path = "common" }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]
+members = ["common", "process"]
