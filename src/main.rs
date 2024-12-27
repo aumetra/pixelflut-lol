@@ -19,6 +19,7 @@ use std::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+const OFFSET: &str = "200 200";
 const WHERE_TO: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(151, 217, 2, 166)), 1337);
 
 macro_rules! attempt {
@@ -68,13 +69,19 @@ async fn release_the_kraken(
     Ok(())
 }
 
+async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
+    let mut stream = TcpStream::connect(addr).await?;
+    stream.set_nodelay(true)?;
+    attempt!(stream.write_all(b"OFFSET").await);
+    attempt!(stream.write_all(OFFSET).await);
+    Ok(stream)
+}
+
 async fn build_conn_pool(addr: SocketAddr, num_conn: usize) -> anyhow::Result<Vec<TcpStream>> {
     let mut conn = Vec::new();
     for idx in 0..num_conn {
         info!("building conn {idx}");
-        let stream = TcpStream::connect(addr).await?;
-        stream.set_nodelay(true)?;
-        conn.push(stream);
+        conn.push(connect(addr).await?);
     }
 
     Ok(conn)
@@ -127,11 +134,10 @@ fn main() -> anyhow::Result<()> {
             let args = args.clone();
 
             move || {
-                let mut runtime = monoio::RuntimeBuilder::<
-                    monoio::time::TimeDriver<monoio::FusionDriver>,
-                >::new()
-                .build()
-                .unwrap();
+                let mut runtime =
+                    monoio::RuntimeBuilder::<monoio::time::TimeDriver<monoio::FusionDriver>>::new()
+                        .build()
+                        .unwrap();
 
                 runtime
                     .block_on(async move {
@@ -139,8 +145,7 @@ fn main() -> anyhow::Result<()> {
                         let pool = build_conn_pool(args.addr, args.num_conn).await?;
 
                         info!("spawning streams");
-                        let mut count = 0;
-                        for mut stream in pool {
+                        for (count, mut stream) in pool.into_iter().enumerate() {
                             let current_frame = Arc::clone(&current_frame);
 
                             monoio::time::sleep(Duration::from_millis(2)).await;
@@ -148,7 +153,8 @@ fn main() -> anyhow::Result<()> {
                             monoio::spawn(async move {
                                 loop {
                                     let frame = current_frame.load(Ordering::Acquire);
-                                    let frame: &riptide_common::Frame = unsafe { &*(frame as *const _) };
+                                    let frame: &riptide_common::Frame =
+                                        unsafe { &*(frame as *const _) };
 
                                     let frame_len = frame.data.len();
                                     let length_per_thread = frame_len / args.num_conn;
@@ -159,13 +165,14 @@ fn main() -> anyhow::Result<()> {
                                         (count + 1) * length_per_thread
                                     };
 
-                                    if let Err(error) = release_the_kraken(&mut stream, frame, start, end).await {
+                                    if let Err(error) =
+                                        release_the_kraken(&mut stream, frame, start, end).await
+                                    {
                                         error!(?error, "sending failed :((");
-                                        stream = TcpStream::connect(args.addr).await.unwrap();
+                                        stream = connect(args.addr).await.unwrap();
                                     }
                                 }
                             });
-                            count += 1;
                         }
 
                         std::future::pending::<anyhow::Result<()>>().await
