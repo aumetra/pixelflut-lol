@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate tracing;
 
-use monoio::{io::AsyncWriteRentExt, net::TcpStream};
+use monoio::{io::{AsyncWriteRent, AsyncWriteRentExt}, net::TcpStream};
 use std::{
     fs::File,
     mem,
@@ -63,15 +63,14 @@ async fn release_the_kraken(
         }
     }
 
+    conn.flush().await?;
+
     Ok(())
 }
 
 async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
     let stream = TcpStream::connect(addr).await?;
     stream.set_nodelay(true)?;
-    stream.readable(false).await?;
-    stream.writable(false).await?;
-
     Ok(stream)
 }
 
