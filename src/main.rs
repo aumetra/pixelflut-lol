@@ -42,9 +42,12 @@ fn encode_dec(
 async fn release_the_kraken(
     conn: &mut TcpStream,
     frame: &riptide_common::Frame<'_>,
+    start: usize,
+    end: usize,
 ) -> anyhow::Result<()> {
     info!("sending frame..");
-    for (y_pos, y_lane) in frame.data.iter().enumerate() {
+    let slice = &frame.data[start..end];
+    for (y_pos, y_lane) in slice.iter().enumerate() {
         for (x_pos, pixel) in y_lane.iter().enumerate() {
             attempt!(conn.write_all(b"PX ").await);
 
@@ -136,6 +139,7 @@ fn main() -> anyhow::Result<()> {
                         let pool = build_conn_pool(args.addr, args.num_conn).await?;
 
                         info!("spawning streams");
+                        let mut count = 0;
                         for mut stream in pool {
                             let current_frame = Arc::clone(&current_frame);
 
@@ -144,14 +148,23 @@ fn main() -> anyhow::Result<()> {
                             monoio::spawn(async move {
                                 loop {
                                     let frame = current_frame.load(Ordering::Acquire);
-                                    let frame = unsafe { &*(frame as *const _) };
+                                    let frame: &riptide_common::Frame = unsafe { &*(frame as *const _) };
 
-                                    if let Err(error) = release_the_kraken(&mut stream, frame).await
-                                    {
+                                    let frame_len = frame.data.len();
+                                    let length_per_thread = frame_len / args.num_conn;
+                                    let start = count * length_per_thread;
+                                    let end = if count == args.num_conn - 1 {
+                                        frame_len
+                                    } else {
+                                        (count + 1) * length_per_thread
+                                    };
+
+                                    if let Err(error) = release_the_kraken(&mut stream, frame, start, end).await {
                                         error!(?error, "sending failed :((");
                                     }
                                 }
                             });
+                            count += 1;
                         }
 
                         anyhow::Ok(())
