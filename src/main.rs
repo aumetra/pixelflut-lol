@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
                             count += 1;
                         }
 
-                        anyhow::Ok(())
+                        std::future::pending::<anyhow::Result<()>>().await
                     })
                     .unwrap();
             }
