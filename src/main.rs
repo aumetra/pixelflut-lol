@@ -19,7 +19,7 @@ use std::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const OFFSET: &str = "200 200";
+const OFFSET: &str = "500 500";
 const WHERE_TO: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(151, 217, 2, 166)), 1337);
 
 macro_rules! attempt {
@@ -73,8 +73,9 @@ async fn release_the_kraken(
 async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
     let mut stream = TcpStream::connect(addr).await?;
     stream.set_nodelay(true)?;
-    attempt!(stream.write_all(b"OFFSET").await);
+    attempt!(stream.write_all(b"OFFSET ").await);
     attempt!(stream.write_all(OFFSET).await);
+    attempt!(stream.write_all(b"\n").await);
     Ok(stream)
 }
 
