@@ -1,10 +1,7 @@
 #[macro_use]
 extern crate tracing;
 
-use monoio::{
-    io::{AsyncWriteRent, AsyncWriteRentExt},
-    net::TcpStream,
-};
+use monoio::{io::AsyncWriteRentExt, net::TcpStream};
 use std::{
     fs::File,
     mem,
@@ -22,7 +19,6 @@ use std::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const OFFSET: &str = "500 500";
 const WHERE_TO: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(151, 217, 2, 166)), 1337);
 
 macro_rules! attempt {
@@ -46,17 +42,18 @@ fn encode_dec(
 async fn release_the_kraken(
     conn: &mut TcpStream,
     frame: &riptide_common::Frame<'_>,
+    (x_offset, y_offset): (usize, usize),
 ) -> anyhow::Result<()> {
     info!("sending frame..");
     for (y_pos, y_lane) in frame.data.iter().enumerate() {
         for (x_pos, pixel) in y_lane.iter().enumerate() {
             attempt!(conn.write_all(b"PX ").await);
 
-            let x_str = encode_dec(x_pos);
+            let x_str = encode_dec(x_pos + x_offset);
             attempt!(conn.write_all(x_str).await);
             attempt!(conn.write_all(b" ").await);
 
-            let y_str = encode_dec(y_pos);
+            let y_str = encode_dec(y_pos + y_offset);
             attempt!(conn.write_all(y_str).await);
             attempt!(conn.write_all(b" ").await);
 
@@ -70,12 +67,10 @@ async fn release_the_kraken(
 }
 
 async fn connect(addr: SocketAddr) -> anyhow::Result<TcpStream> {
-    let mut stream = TcpStream::connect(addr).await?;
+    let stream = TcpStream::connect(addr).await?;
     stream.set_nodelay(true)?;
-    attempt!(stream.write_all(b"OFFSET ").await);
-    attempt!(stream.write_all(OFFSET).await);
-    attempt!(stream.write_all(b"\n").await);
-    stream.flush().await?;
+    stream.readable(false).await?;
+    stream.writable(false).await?;
 
     Ok(stream)
 }
@@ -108,6 +103,14 @@ struct Args {
     #[argh(option)]
     /// file containing the frame data
     data: PathBuf,
+
+    #[argh(option, default = "0")]
+    /// x offset
+    x_offset: usize,
+
+    #[argh(option, default = "0")]
+    /// y offset
+    y_offset: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -137,10 +140,11 @@ fn main() -> anyhow::Result<()> {
             let args = args.clone();
 
             move || {
-                let mut runtime =
-                    monoio::RuntimeBuilder::<monoio::time::TimeDriver<monoio::IoUringDriver>>::new()
-                        .build()
-                        .unwrap();
+                let mut runtime = monoio::RuntimeBuilder::<
+                    monoio::time::TimeDriver<monoio::IoUringDriver>,
+                >::new()
+                .build()
+                .unwrap();
 
                 runtime
                     .block_on(async move {
@@ -159,7 +163,12 @@ fn main() -> anyhow::Result<()> {
                                     let frame: &riptide_common::Frame =
                                         unsafe { &*(frame as *const _) };
 
-                                    if let Err(error) = release_the_kraken(&mut stream, frame).await
+                                    if let Err(error) = release_the_kraken(
+                                        &mut stream,
+                                        frame,
+                                        (args.x_offset, args.y_offset),
+                                    )
+                                    .await
                                     {
                                         error!(?error, "sending failed :((");
                                         stream = connect(args.addr).await.unwrap();
