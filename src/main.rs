@@ -148,14 +148,14 @@ fn main() -> anyhow::Result<()> {
                         let pool = build_conn_pool(args.addr, args.num_conn).await?;
 
                         info!("spawning streams");
-                        for (count, mut stream) in pool.into_iter().enumerate() {
+                        for mut stream in pool {
                             let current_frame = Arc::clone(&current_frame);
 
                             monoio::time::sleep(Duration::from_millis(2)).await;
 
                             monoio::spawn(async move {
                                 loop {
-                                    let frame = current_frame.load(Ordering::Acquire);
+                                    let frame = current_frame.load(Ordering::Relaxed);
                                     let frame: &riptide_common::Frame =
                                         unsafe { &*(frame as *const _) };
 
@@ -182,6 +182,6 @@ fn main() -> anyhow::Result<()> {
         thread::sleep(sleep_duration);
 
         info!("switching to frame {frame_ctr}");
-        current_frame.store(&frames[frame_ctr] as *const _ as usize, Ordering::Release);
+        current_frame.store(&frames[frame_ctr] as *const _ as usize, Ordering::Relaxed);
     }
 }
