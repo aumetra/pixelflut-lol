@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.95"
 argh = "0.1.13"
-lexical = { version = "7.0.4", features = ["power-of-two"] }
+itoa = "1.0.14"
 memmap2 = "0.9.5"
 mimalloc = "0.1.43"
 monoio = { version = "0.2.4", features = ["tracing"] }

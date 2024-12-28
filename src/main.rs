@@ -35,16 +35,12 @@ macro_rules! attempt {
 }
 
 #[inline]
-fn encode_dec(
-    num: impl lexical::ToLexicalWithOptions<Options = lexical::WriteIntegerOptions>,
-) -> Vec<u8> {
-    static DEC_FMT: u128 = lexical::NumberFormatBuilder::decimal();
-    static OPTS: lexical::WriteIntegerOptions = lexical::WriteIntegerOptions::new();
-
-    lexical::to_string_with_options::<_, DEC_FMT>(num, &OPTS).into_bytes()
+fn encode_dec(buf: &mut itoa::Buffer, num: impl itoa::Integer) -> &str {
+    buf.format(num)
 }
 
 async fn release_the_kraken(
+    idx_buf: &mut Vec<usize>,
     conn: &mut TcpStream,
     frame: &riptide_common::ArchivedFrame,
     (x_offset, y_offset): (usize, usize),
@@ -52,25 +48,41 @@ async fn release_the_kraken(
     info!("sending frame..");
 
     // choose random y-lane order
-    let mut y_idxs: Vec<usize> = (0..frame.data.len()).collect();
-    y_idxs.shuffle(&mut rand::thread_rng());
+    idx_buf.clear();
+    idx_buf.extend(0..frame.data.len());
+    idx_buf.shuffle(&mut rand::thread_rng());
 
-    for y_pos in y_idxs {
-        let y_lane = &frame.data[y_pos];
+    let mut num_buf = itoa::Buffer::new();
+
+    for y_pos in idx_buf {
+        let y_lane = &frame.data[*y_pos];
         for (x_pos, pixel) in y_lane.iter().enumerate() {
             attempt!(conn.write_all(b"PX ").await);
 
-            let x_str = encode_dec(x_pos + x_offset);
-            attempt!(conn.write_all(x_str).await);
-            attempt!(conn.write_all(b" ").await);
+            {
+                let x_str = encode_dec(&mut num_buf, x_pos + x_offset);
+                let x_str = unsafe { mem::transmute::<&str, &'static str>(x_str) };
 
-            let y_str = encode_dec(y_pos + y_offset);
-            attempt!(conn.write_all(y_str).await);
-            attempt!(conn.write_all(b" ").await);
+                attempt!(conn.write_all(x_str).await);
+                attempt!(conn.write_all(b" ").await);
+            }
+
+            {
+                let y_str = encode_dec(&mut num_buf, *y_pos + y_offset);
+                let y_str = unsafe { mem::transmute::<&str, &'static str>(y_str) };
+
+                attempt!(conn.write_all(y_str).await);
+                attempt!(conn.write_all(b" ").await);
+            }
 
             // encode pixel as hex
-            attempt!(conn.write_all(pixel.hex_repr.to_vec()).await);
-            attempt!(conn.write_all(b"\n").await);
+            {
+                let hex_repr = pixel.hex_repr.as_slice();
+                let hex_repr = unsafe { mem::transmute::<&[u8], &'static [u8]>(hex_repr) };
+
+                attempt!(conn.write_all(hex_repr).await);
+                attempt!(conn.write_all(b"\n").await);
+            }
         }
     }
 
@@ -128,7 +140,7 @@ struct Args {
 
     #[argh(switch)]
     /// skip the checking of the frame data
-    /// 
+    ///
     /// will speed up initial loads at the cost of potential segfaults
     skip_checks: bool,
 }
@@ -140,13 +152,13 @@ fn main() -> anyhow::Result<()> {
     info!("loading data..");
     let data_file = File::open(&args.data)?;
     let data = unsafe { memmap2::Mmap::map(&data_file)? };
-    
+
     let frames: &ArchivedVec<riptide_common::ArchivedFrame> = if args.skip_checks {
         unsafe { rkyv::access_unchecked(&data) }
     } else {
         rkyv::access::<_, rkyv::rancor::Error>(&data)?
     };
-    
+
     let frames = unsafe {
         mem::transmute::<&[riptide_common::ArchivedFrame], &'static [riptide_common::ArchivedFrame]>(
             frames,
@@ -195,12 +207,15 @@ fn main() -> anyhow::Result<()> {
                             monoio::time::sleep(Duration::from_millis(2)).await;
 
                             monoio::spawn(async move {
+                                let mut idx_buf = Vec::new();
+
                                 loop {
                                     let frame = current_frame.load(Ordering::Relaxed);
                                     let frame: &riptide_common::ArchivedFrame =
                                         unsafe { &*(frame as *const _) };
 
                                     if let Err(error) = release_the_kraken(
+                                        &mut idx_buf,
                                         &mut stream,
                                         frame,
                                         (args.x_offset, args.y_offset),
