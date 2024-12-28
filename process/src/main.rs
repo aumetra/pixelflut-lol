@@ -1,12 +1,17 @@
 use image::{GenericImageView, Pixel};
 use itertools::Itertools;
-use postcard::ser_flavors::io::WriteFlavor;
-use serde::{Serializer, ser::SerializeSeq};
+use rkyv::{
+    Archive, Serialize,
+    api::serialize_using,
+    rancor::Strategy,
+    ser::{allocator::Arena, sharing::Share, writer::IoWriter},
+    vec::{ArchivedVec, VecResolver},
+    with::{ArchiveWith, SerializeWith},
+};
 use std::{
-    borrow::Cow,
     fs::{self, File},
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 #[global_allocator]
@@ -24,7 +29,7 @@ struct Args {
     output: PathBuf,
 }
 
-fn read_frame(entry_path: PathBuf) -> anyhow::Result<riptide_common::Frame<'static>> {
+fn read_frame(entry_path: &Path) -> anyhow::Result<riptide_common::Frame> {
     let image = image::open(entry_path)?;
 
     let mut frame_data = Vec::new();
@@ -38,40 +43,70 @@ fn read_frame(entry_path: PathBuf) -> anyhow::Result<riptide_common::Frame<'stat
                 r,
                 g,
                 b,
-                hex_repr: Cow::Owned(hex_repr.into_bytes()),
+                hex_repr: hex_repr.into_bytes(),
             });
         }
 
-        frame_data.push(Cow::Owned(x_acc));
+        frame_data.push(x_acc);
     }
 
-    Ok(riptide_common::Frame {
-        data: Cow::Owned(frame_data),
-    })
+    Ok(riptide_common::Frame { data: frame_data })
 }
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args: Args = argh::from_env();
 
-    let files = fs::read_dir(args.path)?.collect_vec();
+    let files: Vec<PathBuf> = fs::read_dir(args.path)?
+        .map_ok(|entry| entry.path())
+        .try_collect()?;
 
     let file = File::create(args.output)?;
     let mut file = BufWriter::new(file);
 
-    let mut ser = postcard::Serializer {
-        output: WriteFlavor::new(&mut file),
+    let mut arena = Arena::new();
+    let mut serializer = rkyv::ser::Serializer {
+        writer: IoWriter::new(&mut file),
+        allocator: arena.acquire(),
+        sharing: Share::new(),
     };
+    let serializer = Strategy::<_, rkyv::rancor::Error>::wrap(&mut serializer);
 
-    let mut seq_ser = ser.serialize_seq(Some(files.len()))?;
-    for (idx, entry) in files.into_iter().enumerate() {
-        let entry = entry?;
-        println!("serializing frame {idx}");
+    struct FileSerializer;
 
-        let frame = read_frame(entry.path())?;
-        seq_ser.serialize_element(&frame)?;
+    impl ArchiveWith<Vec<PathBuf>> for FileSerializer {
+        type Archived = ArchivedVec<riptide_common::Frame>;
+        type Resolver = VecResolver;
+
+        fn resolve_with(
+            field: &Vec<PathBuf>,
+            resolver: Self::Resolver,
+            out: rkyv::Place<Self::Archived>,
+        ) {
+            ArchivedVec::resolve_from_len(field.len(), resolver, out)
+        }
     }
-    seq_ser.end()?;
+
+    impl<S> SerializeWith<Vec<PathBuf>, S> for FileSerializer
+    where
+        S: rkyv::rancor::Fallible,
+        S: rkyv::ser::Writer<S::Error> + rkyv::ser::Allocator,
+    {
+        fn serialize_with(
+            field: &Vec<PathBuf>,
+            serializer: &mut S,
+        ) -> Result<Self::Resolver, <S as rkyv::rancor::Fallible>::Error> {
+            ArchivedVec::serialize_from_iter(
+                field.iter().map(|entry| read_frame(entry).unwrap()),
+                serializer,
+            )
+        }
+    }
+
+    #[derive(Archive, Serialize)]
+    #[repr(transparent)]
+    struct ArchiveThing(#[rkyv(with = FileSerializer)] Vec<PathBuf>);
+    serialize_using(&ArchiveThing(files), serializer)?;
 
     file.flush()?;
 

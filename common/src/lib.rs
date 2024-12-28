@@ -1,32 +1,15 @@
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use rkyv::{Archive, Deserialize, Serialize};
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct Pixel<'a> {
+#[derive(Archive, Deserialize, Serialize)]
+pub struct Pixel {
     pub r: u8,
     pub g: u8,
     pub b: u8,
-    #[serde(borrow)]
-    pub hex_repr: Cow<'a, [u8]>,
+    pub hex_repr: Vec<u8>,
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct PixelRef<'a> {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub hex_repr: &'a [u8],
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct FrameRef<'a> {
-    #[serde(borrow)]
-    pub data: Vec<Vec<Pixel<'a>>>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct Frame<'a> {
+#[derive(Archive, Deserialize, Serialize)]
+pub struct Frame {
     // layout: Y(X(pixel))
-    #[serde(borrow)]
-    pub data: Cow<'a, [Cow<'a, [Pixel<'a>]>]>,
+    pub data: Vec<Vec<Pixel>>,
 }

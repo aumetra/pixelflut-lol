@@ -6,6 +6,7 @@ use monoio::{
     net::TcpStream,
 };
 use rand::seq::SliceRandom;
+use rkyv::vec::ArchivedVec;
 use std::{
     fs::File,
     mem,
@@ -13,7 +14,8 @@ use std::{
     path::PathBuf,
     str,
     sync::{
-        atomic::{AtomicUsize, Ordering}, Arc
+        Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, SystemTime},
@@ -44,7 +46,7 @@ fn encode_dec(
 
 async fn release_the_kraken(
     conn: &mut TcpStream,
-    frame: &riptide_common::Frame<'_>,
+    frame: &riptide_common::ArchivedFrame,
     (x_offset, y_offset): (usize, usize),
 ) -> anyhow::Result<()> {
     info!("sending frame..");
@@ -132,15 +134,18 @@ fn main() -> anyhow::Result<()> {
     info!("loading data..");
     let data_file = File::open(&args.data)?;
     let data = unsafe { memmap2::Mmap::map(&data_file)? };
-    let frames: Vec<riptide_common::FrameRef<'_>> = postcard::from_bytes(&data)?;
+    let frames: &ArchivedVec<riptide_common::ArchivedFrame> =
+        rkyv::access::<_, rkyv::rancor::Error>(&data).unwrap();
     let frames = unsafe {
-        mem::transmute::<
-            &[riptide_common::FrameRef<'_>],
-            &'static [riptide_common::FrameRef<'static>],
-        >(&frames)
+        mem::transmute::<&[riptide_common::ArchivedFrame], &'static [riptide_common::ArchivedFrame]>(
+            frames,
+        )
     };
 
+    info!("loaded data successfully");
+
     if let Some(at_timestamp) = args.start_at {
+        info!("waiting until {at_timestamp}..");
         let point_in_time = SystemTime::UNIX_EPOCH + Duration::from_secs(at_timestamp);
         let duration = point_in_time.duration_since(SystemTime::now())?;
 
@@ -150,6 +155,8 @@ fn main() -> anyhow::Result<()> {
     let sleep_duration = Duration::from_secs_f32(1.0 / args.framerate);
     let mut frame_ctr = 0;
     let current_frame = Arc::new(AtomicUsize::new(&frames[frame_ctr] as *const _ as usize));
+
+    info!("starting riptide >:3");
 
     for idx in 0..thread::available_parallelism().unwrap().into() {
         info!("spawning runtime {idx}");
@@ -179,7 +186,7 @@ fn main() -> anyhow::Result<()> {
                             monoio::spawn(async move {
                                 loop {
                                     let frame = current_frame.load(Ordering::Relaxed);
-                                    let frame: &riptide_common::Frame =
+                                    let frame: &riptide_common::ArchivedFrame =
                                         unsafe { &*(frame as *const _) };
 
                                     if let Err(error) = release_the_kraken(
