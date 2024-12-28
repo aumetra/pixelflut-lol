@@ -13,11 +13,10 @@ use std::{
     path::PathBuf,
     str,
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering}, Arc
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 #[global_allocator]
@@ -120,6 +119,10 @@ struct Args {
     #[argh(option, default = "0")]
     /// y offset
     y_offset: usize,
+
+    #[argh(option)]
+    /// start at the provided unix timestamp
+    start_at: Option<u64>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -136,6 +139,13 @@ fn main() -> anyhow::Result<()> {
             &'static [riptide_common::FrameRef<'static>],
         >(&frames)
     };
+
+    if let Some(at_timestamp) = args.start_at {
+        let point_in_time = SystemTime::UNIX_EPOCH + Duration::from_secs(at_timestamp);
+        let duration = point_in_time.duration_since(SystemTime::now())?;
+
+        thread::sleep(duration);
+    }
 
     let sleep_duration = Duration::from_secs_f32(1.0 / args.framerate);
     let mut frame_ctr = 0;
