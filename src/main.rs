@@ -125,6 +125,12 @@ struct Args {
     #[argh(option)]
     /// start at the provided unix timestamp
     start_at: Option<u64>,
+
+    #[argh(switch)]
+    /// skip the checking of the frame data
+    /// 
+    /// will speed up initial loads at the cost of potential segfaults
+    skip_checks: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -134,8 +140,13 @@ fn main() -> anyhow::Result<()> {
     info!("loading data..");
     let data_file = File::open(&args.data)?;
     let data = unsafe { memmap2::Mmap::map(&data_file)? };
-    let frames: &ArchivedVec<riptide_common::ArchivedFrame> =
-        rkyv::access::<_, rkyv::rancor::Error>(&data).unwrap();
+    
+    let frames: &ArchivedVec<riptide_common::ArchivedFrame> = if args.skip_checks {
+        unsafe { rkyv::access_unchecked(&data) }
+    } else {
+        rkyv::access::<_, rkyv::rancor::Error>(&data)?
+    };
+    
     let frames = unsafe {
         mem::transmute::<&[riptide_common::ArchivedFrame], &'static [riptide_common::ArchivedFrame]>(
             frames,
