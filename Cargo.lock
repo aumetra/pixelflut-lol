@@ -1101,6 +1101,7 @@ dependencies = [
  "mimalloc",
  "monoio",
  "postcard",
+ "rand",
  "riptide-common",
  "tracing",
  "tracing-subscriber",

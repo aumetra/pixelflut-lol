@@ -1,7 +1,11 @@
 #[macro_use]
 extern crate tracing;
 
-use monoio::{io::{AsyncWriteRent, AsyncWriteRentExt}, net::TcpStream};
+use monoio::{
+    io::{AsyncWriteRent, AsyncWriteRentExt},
+    net::TcpStream,
+};
+use rand::seq::SliceRandom;
 use std::{
     fs::File,
     mem,
@@ -45,7 +49,13 @@ async fn release_the_kraken(
     (x_offset, y_offset): (usize, usize),
 ) -> anyhow::Result<()> {
     info!("sending frame..");
-    for (y_pos, y_lane) in frame.data.iter().enumerate() {
+
+    // choose random y-lane order
+    let mut y_idxs: Vec<usize> = (0..frame.data.len()).collect();
+    y_idxs.shuffle(&mut rand::thread_rng());
+
+    for y_pos in y_idxs {
+        let y_lane = &frame.data[y_pos];
         for (x_pos, pixel) in y_lane.iter().enumerate() {
             attempt!(conn.write_all(b"PX ").await);
 
