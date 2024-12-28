@@ -11,5 +11,4 @@ itertools = "0.13.0"
 mimalloc = "0.1.43"
 riptide-common = { path = "../common" }
 rkyv = { version = "0.8.9", features = ["pointer_width_64"] }
-tempfile = "3.14.0"
 tracing-subscriber = "0.3.19"
