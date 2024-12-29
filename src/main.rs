@@ -57,6 +57,10 @@ async fn release_the_kraken(
     for y_pos in idx_buf {
         let y_lane = &frame.data[*y_pos];
         for (x_pos, pixel) in y_lane.iter().enumerate() {
+            if !pixel.draw {
+                continue;
+            }
+
             attempt!(conn.write_all(b"PX ").await);
 
             {
@@ -81,8 +85,9 @@ async fn release_the_kraken(
                 let hex_repr = unsafe { mem::transmute::<&[u8], &'static [u8]>(hex_repr) };
 
                 attempt!(conn.write_all(hex_repr).await);
-                attempt!(conn.write_all(b"\n").await);
             }
+
+            attempt!(conn.write_all(b"\n").await);
         }
     }
 
@@ -116,6 +121,8 @@ struct Args {
 
     #[argh(option, default = "50")]
     /// amount of parallel connections open to flood
+    ///
+    /// this number is per physical core. so actual connection amount is: [num_conns] * [physical core num]
     num_conn: usize,
 
     #[argh(option, default = "WHERE_TO")]
@@ -203,8 +210,6 @@ fn main() -> anyhow::Result<()> {
                         info!("spawning streams");
                         for mut stream in pool {
                             let current_frame = Arc::clone(&current_frame);
-
-                            monoio::time::sleep(Duration::from_millis(2)).await;
 
                             monoio::spawn(async move {
                                 let mut idx_buf = Vec::new();

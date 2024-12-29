@@ -12,6 +12,7 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 #[global_allocator]
@@ -29,7 +30,26 @@ struct Args {
     output: PathBuf,
 }
 
-fn read_frame(entry_path: &Path) -> anyhow::Result<riptide_common::Frame> {
+fn differential_analysis(
+    previous_frame: &riptide_common::Frame,
+    new_frame: &mut riptide_common::Frame,
+) {
+    for (previous_y_lane, new_y_lane) in previous_frame.data.iter().zip(&mut new_frame.data) {
+        for (previous_pixel, new_pixel) in previous_y_lane.iter().zip(new_y_lane) {
+            if previous_pixel.r == new_pixel.r
+                && previous_pixel.g == new_pixel.g
+                && previous_pixel.b == new_pixel.b
+            {
+                new_pixel.draw = false;
+            }
+        }
+    }
+}
+
+fn read_frame(
+    previous_frame: &Option<riptide_common::Frame>,
+    entry_path: &Path,
+) -> anyhow::Result<riptide_common::Frame> {
     let image = image::open(entry_path)?;
 
     let mut frame_data = Vec::new();
@@ -44,13 +64,19 @@ fn read_frame(entry_path: &Path) -> anyhow::Result<riptide_common::Frame> {
                 g,
                 b,
                 hex_repr: hex_repr.into_bytes(),
+                draw: true,
             });
         }
 
         frame_data.push(x_acc);
     }
 
-    Ok(riptide_common::Frame { data: frame_data })
+    let mut new_frame = riptide_common::Frame { data: frame_data };
+    if let Some(previous_frame) = previous_frame {
+        differential_analysis(previous_frame, &mut new_frame);
+    }
+
+    Ok(new_frame)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -71,6 +97,8 @@ fn main() -> anyhow::Result<()> {
         sharing: Share::new(),
     };
     let serializer = Strategy::<_, rkyv::rancor::Error>::wrap(&mut serializer);
+
+    static LAST_FRAME: Mutex<Option<riptide_common::Frame>> = Mutex::new(None);
 
     struct FileSerializer;
 
@@ -97,7 +125,12 @@ fn main() -> anyhow::Result<()> {
             serializer: &mut S,
         ) -> Result<Self::Resolver, <S as rkyv::rancor::Fallible>::Error> {
             ArchivedVec::serialize_from_iter(
-                field.iter().map(|entry| read_frame(entry).unwrap()),
+                field.iter().map(|entry| {
+                    let mut frame_guard = LAST_FRAME.lock().unwrap();
+                    let new_frame = read_frame(&frame_guard, entry).unwrap();
+                    *frame_guard = Some(new_frame.clone());
+                    new_frame
+                }),
                 serializer,
             )
         }
