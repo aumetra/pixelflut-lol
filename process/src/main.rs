@@ -12,7 +12,6 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
 };
 
 #[global_allocator]
@@ -98,8 +97,6 @@ fn main() -> anyhow::Result<()> {
     };
     let serializer = Strategy::<_, rkyv::rancor::Error>::wrap(&mut serializer);
 
-    static LAST_FRAME: Mutex<Option<riptide_common::Frame>> = Mutex::new(None);
-
     struct FileSerializer;
 
     impl ArchiveWith<Vec<PathBuf>> for FileSerializer {
@@ -124,11 +121,12 @@ fn main() -> anyhow::Result<()> {
             field: &Vec<PathBuf>,
             serializer: &mut S,
         ) -> Result<Self::Resolver, <S as rkyv::rancor::Fallible>::Error> {
+            let mut previous_frame = None;
+
             ArchivedVec::serialize_from_iter(
-                field.iter().map(|entry| {
-                    let mut frame_guard = LAST_FRAME.lock().unwrap();
-                    let new_frame = read_frame(&frame_guard, entry).unwrap();
-                    *frame_guard = Some(new_frame.clone());
+                field.iter().map(move |entry| {
+                    let new_frame = read_frame(&previous_frame, entry).unwrap();
+                    previous_frame = Some(new_frame.clone());
                     new_frame
                 }),
                 serializer,
