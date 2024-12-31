@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate tracing;
 
+use anyhow::anyhow;
 use monoio::{
     io::{AsyncWriteRent, AsyncWriteRentExt},
     net::TcpStream,
@@ -188,11 +189,13 @@ fn main() -> anyhow::Result<()> {
 
     info!("starting riptide >:3");
 
-    for idx in 0..thread::available_parallelism().unwrap().into() {
+    let num_threads = thread::available_parallelism()?.get();
+    let mut join_handles = Vec::with_capacity(num_threads);
+    for idx in 0..num_threads {
         info!("spawning runtime {idx}");
 
         let current_frame = current_frame.clone();
-        thread::spawn({
+        let handle = thread::spawn({
             let args = args.clone();
 
             move || {
@@ -228,7 +231,12 @@ fn main() -> anyhow::Result<()> {
                                     .await
                                     {
                                         error!(?error, "sending failed :((");
-                                        stream = connect(args.addr).await.unwrap();
+                                        stream = loop {
+                                            match connect(args.addr).await {
+                                                Ok(conn) => break conn,
+                                                Err(error) => error!(?error, "failed to reconnect"),
+                                            }
+                                        };
                                     }
                                 }
                             });
@@ -239,9 +247,11 @@ fn main() -> anyhow::Result<()> {
                     .unwrap();
             }
         });
+
+        join_handles.push(handle);
     }
 
-    loop {
+    while !join_handles.is_empty() {
         frame_ctr += 1;
         frame_ctr %= frames.len();
 
@@ -249,5 +259,9 @@ fn main() -> anyhow::Result<()> {
 
         info!("switching to frame {frame_ctr}");
         current_frame.store(&frames[frame_ctr] as *const _ as usize, Ordering::Relaxed);
+
+        join_handles.retain(|handle| !handle.is_finished());
     }
+
+    Err(anyhow!("somehow all worker threads died. bad :("))
 }
