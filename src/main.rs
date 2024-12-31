@@ -6,12 +6,13 @@ use monoio::{
     io::{AsyncWriteRent, AsyncWriteRentExt},
     net::TcpStream,
 };
-use rand::seq::SliceRandom;
+use rand::seq::{IteratorRandom, SliceRandom};
 use rkyv::vec::ArchivedVec;
 use std::{
     fs::File,
     mem,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    ops::RangeInclusive,
     path::PathBuf,
     str,
     sync::{
@@ -25,6 +26,7 @@ use std::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+const WAIT_RANGE: RangeInclusive<u64> = 50..=200;
 const WHERE_TO: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(151, 217, 2, 166)), 1337);
 
 macro_rules! attempt {
@@ -236,6 +238,11 @@ fn main() -> anyhow::Result<()> {
                                                 Ok(conn) => break conn,
                                                 Err(error) => error!(?error, "failed to reconnect"),
                                             }
+
+                                            let wait_millis =
+                                                WAIT_RANGE.choose(&mut rand::thread_rng()).unwrap();
+                                            monoio::time::sleep(Duration::from_millis(wait_millis))
+                                                .await;
                                         };
                                     }
                                 }
